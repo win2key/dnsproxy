@@ -21,8 +21,7 @@ func handleDNSRequest(w dns.ResponseWriter, r *dns.Msg) {
 
 	for _, question := range r.Question {
 		log.Printf("Received query for %s\n", question.Name)
-		switch question.Qtype {
-		case dns.TypeA:
+		if question.Qtype == dns.TypeA {
 			domain := question.Name
 			ip, found := dnsRecords[domain]
 			if found {
@@ -67,14 +66,29 @@ func main() {
 	// Setup the DNS server
 	dns.HandleFunc(".", handleDNSRequest)
 
-	server := &dns.Server{
+	// Listen on UDP
+	udpServer := &dns.Server{
 		Addr: "127.0.0.1:53",
 		Net:  "udp",
 	}
 
-	log.Printf("Starting DNS server on %s", server.Addr)
-	err = server.ListenAndServe()
+	go func() {
+		log.Printf("Starting UDP DNS server on %s", udpServer.Addr)
+		err = udpServer.ListenAndServe()
+		if err != nil {
+			log.Fatalf("Failed to start UDP DNS server: %s\n", err.Error())
+		}
+	}()
+
+	// Listen on TCP
+	tcpServer := &dns.Server{
+		Addr: "127.0.0.1:53",
+		Net:  "tcp",
+	}
+
+	log.Printf("Starting TCP DNS server on %s", tcpServer.Addr)
+	err = tcpServer.ListenAndServe()
 	if err != nil {
-		log.Fatalf("Failed to start DNS server: %s\n", err.Error())
+		log.Fatalf("Failed to start TCP DNS server: %s\n", err.Error())
 	}
 }
