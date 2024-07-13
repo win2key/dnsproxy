@@ -3,7 +3,6 @@ package main
 import (
 	"log"
 	"net"
-	"os"
 
 	"github.com/miekg/dns"
 )
@@ -55,14 +54,6 @@ func handleDNSRequest(w dns.ResponseWriter, r *dns.Msg) {
 }
 
 func main() {
-	// Setup logging to a file
-	f, err := os.OpenFile("dnsproxy.log", os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
-	if err != nil {
-		log.Fatalf("Error opening log file: %v", err)
-	}
-	defer f.Close()
-	log.SetOutput(f)
-
 	// Setup the DNS server
 	dns.HandleFunc(".", handleDNSRequest)
 
@@ -74,7 +65,7 @@ func main() {
 
 	go func() {
 		log.Printf("Starting UDP DNS server on %s", udpServer.Addr)
-		err = udpServer.ListenAndServe()
+		err := udpServer.ListenAndServe()
 		if err != nil {
 			log.Fatalf("Failed to start UDP DNS server: %s\n", err.Error())
 		}
@@ -87,7 +78,7 @@ func main() {
 	}
 
 	log.Printf("Starting TCP DNS server on %s", tcpServer.Addr)
-	err = tcpServer.ListenAndServe()
+	err := tcpServer.ListenAndServe()
 	if err != nil {
 		log.Fatalf("Failed to start TCP DNS server: %s\n", err.Error())
 	}
