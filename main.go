@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -19,6 +20,8 @@ var dnsRecords = map[string]string{
 	"example.com.": "1.2.3.4",
 	"test.com.":    "5.6.7.8",
 }
+
+var forwardDNS string
 
 func handleDNSRequest(w dns.ResponseWriter, r *dns.Msg) {
 	msg := dns.Msg{}
@@ -43,12 +46,12 @@ func handleDNSRequest(w dns.ResponseWriter, r *dns.Msg) {
 				}
 				msg.Answer = append(msg.Answer, rr)
 			} else {
-				// log.Printf("Domain not found in memory, querying 8.8.8.8: %s\n", domain)
-				// Forward to 8.8.8.8
+				// log.Printf("Domain not found in memory, querying %s: %s\n", forwardDNS, domain)
+				// Forward to detected DNS server
 				c := new(dns.Client)
-				in, _, err := c.Exchange(r, "8.8.8.8:53")
+				in, _, err := c.Exchange(r, forwardDNS)
 				if err != nil {
-					log.Printf("Error querying 8.8.8.8: %v", err)
+					log.Printf("Error querying %s: %v", forwardDNS, err)
 					dns.HandleFailed(w, r)
 					return
 				}
@@ -76,7 +79,7 @@ func setDNSOnStart() {
 	if err != nil {
 		log.Fatalf("Failed to set DNS on start: %v", err)
 	}
-	log.Printf("DNS set to 127.0.0.1 and ::1 on start")
+	log.Printf("Bind DNS (on start)")
 }
 
 func resetDNSOnExit() {
@@ -95,10 +98,83 @@ func resetDNSOnExit() {
 	if err != nil {
 		log.Fatalf("Failed to reset DNS on exit: %v", err)
 	}
-	log.Printf("DNS reset to default on exit")
+	log.Printf("Release DNS (on exit)")
+}
+
+func detectSystemDNS() string {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("scutil", "--dns")
+	case "linux":
+		cmd = exec.Command("nmcli", "device", "show")
+	case "windows":
+		cmd = exec.Command("powershell", "Get-DnsClientServerAddress")
+	default:
+		log.Fatalf("Unsupported OS: %s", runtime.GOOS)
+	}
+	output, err := cmd.Output()
+	if err != nil {
+		log.Fatalf("Failed to detect system DNS: %v", err)
+	}
+	return parseDNSServer(output)
+}
+
+func parseDNSServer(output []byte) string {
+	lines := strings.Split(string(output), "\n")
+	switch runtime.GOOS {
+	case "darwin":
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "nameserver[0]") {
+				parts := strings.Fields(line)
+				if len(parts) > 2 {
+					return parts[2] + ":53"
+				}
+			}
+		}
+	case "linux":
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "IP4.DNS") {
+				parts := strings.Fields(line)
+				if len(parts) > 1 {
+					return parts[1] + ":53"
+				}
+			}
+		}
+	case "windows":
+		var ipv4DNS, ipv6DNS string
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "Wi-Fi") {
+				for _, nextLine := range lines {
+					if strings.HasPrefix(nextLine, "Wi-Fi") {
+						if strings.Contains(nextLine, "IPv4") && strings.Contains(nextLine, "{") {
+							ipv4DNS = strings.Trim(nextLine[strings.Index(nextLine, "{")+1:strings.Index(nextLine, "}")], " ")
+						}
+						if strings.Contains(nextLine, "IPv6") && strings.Contains(nextLine, "{") {
+							ipv6DNS = strings.Trim(nextLine[strings.Index(nextLine, "{")+1:strings.Index(nextLine, "}")], " ")
+						}
+					}
+				}
+				if ipv4DNS != "" {
+					return ipv4DNS + ":53"
+				}
+				if ipv6DNS != "" {
+					return "[" + ipv6DNS + "]:53"
+				}
+			}
+		}
+	}
+	return "8.8.8.8:53" // Default to Google DNS if detection fails
 }
 
 func main() {
+	// Detect current DNS server
+	forwardDNS = detectSystemDNS()
+	log.Printf("DNS forwarder: %s\n", forwardDNS)
+
 	// Set DNS on start
 	setDNSOnStart()
 
@@ -135,7 +211,7 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("Starting UDP DNS server on %s", udpServerIPv4.Addr)
+		log.Printf("... UDP listener on %s", udpServerIPv4.Addr)
 		if err := udpServerIPv4.ListenAndServe(); err != nil {
 			log.Printf("Failed to start UDP DNS server: %s\n", err.Error())
 			sigs <- syscall.SIGTERM
@@ -143,7 +219,7 @@ func main() {
 	}()
 
 	go func() {
-		log.Printf("Starting UDP DNS server on %s", udpServerIPv6.Addr)
+		log.Printf("... UDP listener on %s", udpServerIPv6.Addr)
 		if err := udpServerIPv6.ListenAndServe(); err != nil {
 			log.Printf("Failed to start UDP DNS server: %s\n", err.Error())
 			sigs <- syscall.SIGTERM
@@ -151,7 +227,7 @@ func main() {
 	}()
 
 	go func() {
-		log.Printf("Starting TCP DNS server on %s", tcpServerIPv4.Addr)
+		log.Printf("... TCP listener on %s", tcpServerIPv4.Addr)
 		if err := tcpServerIPv4.ListenAndServe(); err != nil {
 			log.Printf("Failed to start TCP DNS server: %s\n", err.Error())
 			sigs <- syscall.SIGTERM
@@ -159,7 +235,7 @@ func main() {
 	}()
 
 	go func() {
-		log.Printf("Starting TCP DNS server on %s", tcpServerIPv6.Addr)
+		log.Printf("... TCP listener on %s", tcpServerIPv6.Addr)
 		if err := tcpServerIPv6.ListenAndServe(); err != nil {
 			log.Printf("Failed to start TCP DNS server: %s\n", err.Error())
 			sigs <- syscall.SIGTERM
