@@ -64,11 +64,11 @@ func setDNSOnStart() {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
-		cmd = exec.Command("networksetup", "-setdnsservers", "Wi-Fi", "127.0.0.1")
+		cmd = exec.Command("networksetup", "-setdnsservers", "Wi-Fi", "127.0.0.1", "::1")
 	case "linux":
-		cmd = exec.Command("nmcli", "device", "modify", "eth0", "ipv4.dns", "127.0.0.1")
+		cmd = exec.Command("nmcli", "device", "modify", "eth0", "ipv4.dns", "127.0.0.1", "ipv6.dns", "::1")
 	case "windows":
-		cmd = exec.Command("powershell", "Set-DnsClientServerAddress", "-InterfaceAlias", "\"Wi-Fi\"", "-ServerAddresses", "127.0.0.1")
+		cmd = exec.Command("powershell", "Set-DnsClientServerAddress", "-InterfaceAlias", "\"Wi-Fi\"", "-ServerAddresses", "127.0.0.1,::1")
 	default:
 		log.Fatalf("Unsupported OS: %s", runtime.GOOS)
 	}
@@ -76,7 +76,7 @@ func setDNSOnStart() {
 	if err != nil {
 		log.Fatalf("Failed to set DNS on start: %v", err)
 	}
-	log.Printf("DNS set to 127.0.0.1 on start")
+	log.Printf("DNS set to 127.0.0.1 and ::1 on start")
 }
 
 func resetDNSOnExit() {
@@ -85,7 +85,7 @@ func resetDNSOnExit() {
 	case "darwin":
 		cmd = exec.Command("networksetup", "-setdnsservers", "Wi-Fi", "empty")
 	case "linux":
-		cmd = exec.Command("nmcli", "device", "modify", "eth0", "ipv4.ignore-auto-dns", "yes")
+		cmd = exec.Command("nmcli", "device", "modify", "eth0", "ipv4.ignore-auto-dns", "yes", "ipv6.ignore-auto-dns", "yes")
 	case "windows":
 		cmd = exec.Command("powershell", "Set-DnsClientServerAddress", "-InterfaceAlias", "\"Wi-Fi\"", "-ResetServerAddresses")
 	default:
@@ -113,28 +113,54 @@ func main() {
 	dns.HandleFunc(".", handleDNSRequest)
 
 	// Listen on UDP
-	udpServer := &dns.Server{
+	udpServerIPv4 := &dns.Server{
 		Addr: "127.0.0.1:53",
 		Net:  "udp",
 	}
 
+	udpServerIPv6 := &dns.Server{
+		Addr: "[::1]:53",
+		Net:  "udp",
+	}
+
 	// Listen on TCP
-	tcpServer := &dns.Server{
+	tcpServerIPv4 := &dns.Server{
 		Addr: "127.0.0.1:53",
 		Net:  "tcp",
 	}
 
+	tcpServerIPv6 := &dns.Server{
+		Addr: "[::1]:53",
+		Net:  "tcp",
+	}
+
 	go func() {
-		log.Printf("Starting UDP DNS server on %s", udpServer.Addr)
-		if err := udpServer.ListenAndServe(); err != nil {
+		log.Printf("Starting UDP DNS server on %s", udpServerIPv4.Addr)
+		if err := udpServerIPv4.ListenAndServe(); err != nil {
 			log.Printf("Failed to start UDP DNS server: %s\n", err.Error())
 			sigs <- syscall.SIGTERM
 		}
 	}()
 
 	go func() {
-		log.Printf("Starting TCP DNS server on %s", tcpServer.Addr)
-		if err := tcpServer.ListenAndServe(); err != nil {
+		log.Printf("Starting UDP DNS server on %s", udpServerIPv6.Addr)
+		if err := udpServerIPv6.ListenAndServe(); err != nil {
+			log.Printf("Failed to start UDP DNS server: %s\n", err.Error())
+			sigs <- syscall.SIGTERM
+		}
+	}()
+
+	go func() {
+		log.Printf("Starting TCP DNS server on %s", tcpServerIPv4.Addr)
+		if err := tcpServerIPv4.ListenAndServe(); err != nil {
+			log.Printf("Failed to start TCP DNS server: %s\n", err.Error())
+			sigs <- syscall.SIGTERM
+		}
+	}()
+
+	go func() {
+		log.Printf("Starting TCP DNS server on %s", tcpServerIPv6.Addr)
+		if err := tcpServerIPv6.ListenAndServe(); err != nil {
 			log.Printf("Failed to start TCP DNS server: %s\n", err.Error())
 			sigs <- syscall.SIGTERM
 		}
@@ -147,11 +173,19 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := udpServer.ShutdownContext(ctx); err != nil {
+	if err := udpServerIPv4.ShutdownContext(ctx); err != nil {
 		log.Printf("Failed to gracefully shutdown UDP server: %v", err)
 	}
 
-	if err := tcpServer.ShutdownContext(ctx); err != nil {
+	if err := udpServerIPv6.ShutdownContext(ctx); err != nil {
+		log.Printf("Failed to gracefully shutdown UDP server: %v", err)
+	}
+
+	if err := tcpServerIPv4.ShutdownContext(ctx); err != nil {
+		log.Printf("Failed to gracefully shutdown TCP server: %v", err)
+	}
+
+	if err := tcpServerIPv6.ShutdownContext(ctx); err != nil {
 		log.Printf("Failed to gracefully shutdown TCP server: %v", err)
 	}
 
