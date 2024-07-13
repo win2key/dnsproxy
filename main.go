@@ -20,7 +20,7 @@ func handleDNSRequest(w dns.ResponseWriter, r *dns.Msg) {
 	msg.Authoritative = true
 
 	for _, question := range r.Question {
-		log.Printf("Received query for %s\n", question.Name)
+		log.Printf(": %s\n", question.Name)
 		if question.Qtype == dns.TypeA {
 			domain := question.Name
 			ip, found := dnsRecords[domain]
@@ -37,7 +37,7 @@ func handleDNSRequest(w dns.ResponseWriter, r *dns.Msg) {
 				}
 				msg.Answer = append(msg.Answer, rr)
 			} else {
-				log.Printf("Domain not found in memory, querying 8.8.8.8: %s\n", domain)
+				// log.Printf("Domain not found in memory, querying 8.8.8.8: %s\n", domain)
 				// Forward to 8.8.8.8
 				c := new(dns.Client)
 				in, _, err := c.Exchange(r, "8.8.8.8:53")
