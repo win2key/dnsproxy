@@ -26,6 +26,7 @@ var forwardDNS string
 func handleDNSRequest(w dns.ResponseWriter, r *dns.Msg) {
 	msg := dns.Msg{}
 	msg.SetReply(r)
+	msg.RecursionAvailable = true // Set recursion available flag
 	msg.Authoritative = true
 
 	for _, question := range r.Question {
