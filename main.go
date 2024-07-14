@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -15,60 +18,69 @@ import (
 	"github.com/miekg/dns"
 )
 
-// In-memory DNS records
-var dnsRecords = map[string]string{
-	"example.com.": "1.2.3.4",
-	"test.com.":    "5.6.7.8",
+type Config struct {
+	Environment map[string]string `json:"environment"`
+	Sites       []string          `json:"sites"`
 }
 
+var config Config
+var currentEnv string
 var forwardDNS string
+
+func loadConfig() {
+	file, err := os.Open("hosts.json")
+	if err != nil {
+		log.Fatalf("Failed to open config file: %v", err)
+	}
+	defer file.Close()
+
+	decoder := json.NewDecoder(file)
+	if err := decoder.Decode(&config); err != nil {
+		log.Fatalf("Failed to decode config file: %v", err)
+	}
+}
 
 func handleDNSRequest(w dns.ResponseWriter, r *dns.Msg) {
 	msg := dns.Msg{}
 	msg.SetReply(r)
-	msg.RecursionAvailable = true // Set recursion available flag
+	msg.RecursionAvailable = true
 	msg.Authoritative = true
 
 	for _, question := range r.Question {
 		log.Printf(": %s\n", question.Name)
 		if question.Qtype == dns.TypeA {
-			domain := question.Name
-			ip, found := dnsRecords[domain]
+			domain := strings.TrimSuffix(question.Name, ".")
+			var ip string
+			var found bool
+			for _, site := range config.Sites {
+				if domain == site || strings.HasSuffix(domain, "."+site) {
+					ip = config.Environment[currentEnv]
+					found = true
+					break
+				}
+			}
 			if found {
-				log.Printf("Domain found in memory: %s -> %s\n", domain, ip)
-				rr := &dns.A{
-					Hdr: dns.RR_Header{
-						Name:   domain,
-						Rrtype: dns.TypeA,
-						Class:  dns.ClassINET,
-						Ttl:    3600,
-					},
-					A: net.ParseIP(ip),
+				if currentEnv == "world" {
+					c := new(dns.Client)
+					in, _, err := c.Exchange(r, forwardDNS)
+					if err != nil {
+						log.Printf("Error querying %s: %v", forwardDNS, err)
+						dns.HandleFailed(w, r)
+						return
+					}
+					msg.Answer = in.Answer
+				} else {
+					rr := &dns.A{
+						Hdr: dns.RR_Header{
+							Name:   question.Name,
+							Rrtype: dns.TypeA,
+							Class:  dns.ClassINET,
+							Ttl:    3600,
+						},
+						A: net.ParseIP(ip),
+					}
+					msg.Answer = append(msg.Answer, rr)
 				}
-				msg.Answer = append(msg.Answer, rr)
-			} else if strings.HasSuffix(domain, ".test.com.") {
-				log.Printf("Wildcard domain match: %s -> %s\n", domain, dnsRecords["test.com."])
-				rr := &dns.A{
-					Hdr: dns.RR_Header{
-						Name:   domain,
-						Rrtype: dns.TypeA,
-						Class:  dns.ClassINET,
-						Ttl:    3600,
-					},
-					A: net.ParseIP(dnsRecords["test.com."]),
-				}
-				msg.Answer = append(msg.Answer, rr)
-			} else {
-				// log.Printf("Domain not found in memory, querying %s: %s\n", forwardDNS, domain)
-				// Forward to detected DNS server
-				c := new(dns.Client)
-				in, _, err := c.Exchange(r, forwardDNS)
-				if err != nil {
-					log.Printf("Error querying %s: %v", forwardDNS, err)
-					dns.HandleFailed(w, r)
-					return
-				}
-				msg.Answer = in.Answer
 			}
 		}
 	}
@@ -183,7 +195,85 @@ func parseDNSServer(output []byte) string {
 	return "8.8.8.8:53" // Default to Google DNS if detection fails
 }
 
+func switchEnvironment(env string) {
+	if _, ok := config.Environment[env]; ok {
+		currentEnv = env
+		log.Printf("Switched environment to %s: %s\n", env, config.Environment[env])
+	} else {
+		log.Printf("Environment %s not found\n", env)
+	}
+}
+
+func handleSwitch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
+		return
+	}
+	env := r.URL.Query().Get("env")
+	if env == "" {
+		http.Error(w, "Environment not specified", http.StatusBadRequest)
+		return
+	}
+	switchEnvironment(env)
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, env)
+}
+
+func handleCurrentEnv(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, currentEnv)
+}
+
+func setupHTTPServer() {
+	http.HandleFunc("/switch", handleSwitch)
+	http.HandleFunc("/currentEnv", handleCurrentEnv)
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `
+			<!DOCTYPE html>
+			<html>
+			<head>
+				<title>Switch Environment</title>
+				<script>
+					function switchEnv(env) {
+						fetch('/switch?env=' + env, { method: 'POST' })
+							.then(response => response.text())
+							.then(data => {
+								document.getElementById('currentEnv').innerText = "Current env: " + data;
+							});
+					}
+
+					function fetchCurrentEnv() {
+						fetch('/currentEnv')
+							.then(response => response.text())
+							.then(data => {
+								document.getElementById('currentEnv').innerText = "Current env: " + data;
+							});
+					}
+
+					window.onload = fetchCurrentEnv;
+				</script>
+			</head>
+			<body>
+				<h1>Switch DNS Environment</h1>
+				<button onclick="switchEnv('local')">Local</button>
+				<button onclick="switchEnv('dev')">Dev</button>
+				<button onclick="switchEnv('prod')">Prod</button>
+				<button onclick="switchEnv('world')">World</button>
+				<div id="currentEnv">Current env: local</div>
+			</body>
+			</html>
+		`)
+	})
+
+	log.Println("HTTP server listening on :5000")
+	log.Fatal(http.ListenAndServe(":5000", nil))
+}
+
 func main() {
+	// Load configuration
+	loadConfig()
+	currentEnv = "local"
+
 	// Detect current DNS server
 	forwardDNS = detectSystemDNS()
 	log.Printf("DNS forwarder: %s\n", forwardDNS)
@@ -254,6 +344,9 @@ func main() {
 			sigs <- syscall.SIGTERM
 		}
 	}()
+
+	// Start the HTTP server for environment switching
+	go setupHTTPServer()
 
 	sig := <-sigs
 	log.Printf("Received signal: %v", sig)
