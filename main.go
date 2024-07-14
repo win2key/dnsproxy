@@ -250,19 +250,19 @@ func main() {
 	defer cancel()
 
 	if err := udpServerIPv4.ShutdownContext(ctx); err != nil {
-		log.Printf("Failed to gracefully shutdown UDP server: %v", err)
+		log.Printf("Failed to gracefully shutdown UDP listener: %v", err)
 	}
 
 	if err := udpServerIPv6.ShutdownContext(ctx); err != nil {
-		log.Printf("Failed to gracefully shutdown UDP server: %v", err)
+		log.Printf("Failed to gracefully shutdown UDP listener: %v", err)
 	}
 
 	if err := tcpServerIPv4.ShutdownContext(ctx); err != nil {
-		log.Printf("Failed to gracefully shutdown TCP server: %v", err)
+		log.Printf("Failed to gracefully shutdown TCP listener: %v", err)
 	}
 
 	if err := tcpServerIPv6.ShutdownContext(ctx); err != nil {
-		log.Printf("Failed to gracefully shutdown TCP server: %v", err)
+		log.Printf("Failed to gracefully shutdown TCP listener: %v", err)
 	}
 
 	log.Println("Exiting program")
