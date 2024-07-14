@@ -45,6 +45,18 @@ func handleDNSRequest(w dns.ResponseWriter, r *dns.Msg) {
 					A: net.ParseIP(ip),
 				}
 				msg.Answer = append(msg.Answer, rr)
+			} else if strings.HasSuffix(domain, ".test.com.") {
+				log.Printf("Wildcard domain match: %s -> %s\n", domain, dnsRecords["test.com."])
+				rr := &dns.A{
+					Hdr: dns.RR_Header{
+						Name:   domain,
+						Rrtype: dns.TypeA,
+						Class:  dns.ClassINET,
+						Ttl:    3600,
+					},
+					A: net.ParseIP(dnsRecords["test.com."]),
+				}
+				msg.Answer = append(msg.Answer, rr)
 			} else {
 				// log.Printf("Domain not found in memory, querying %s: %s\n", forwardDNS, domain)
 				// Forward to detected DNS server
