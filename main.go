@@ -81,6 +81,15 @@ func handleDNSRequest(w dns.ResponseWriter, r *dns.Msg) {
 					}
 					msg.Answer = append(msg.Answer, rr)
 				}
+			} else {
+				c := new(dns.Client)
+				in, _, err := c.Exchange(r, forwardDNS)
+				if err != nil {
+					log.Printf("Error querying %s: %v", forwardDNS, err)
+					dns.HandleFailed(w, r)
+					return
+				}
+				msg.Answer = in.Answer
 			}
 		}
 	}
@@ -270,6 +279,10 @@ func setupHTTPServer() {
 }
 
 func main() {
+	// Print startup banner
+	fmt.Println(">   dnsproxy v0.1, (c) Vadym L '2024,  all rights reserved   <")
+	fmt.Println(">   for issues: https://github.com/win2key/dnsproxy/issues   <")
+
 	// Load configuration
 	loadConfig()
 	currentEnv = "local"
