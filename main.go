@@ -225,12 +225,12 @@ func handleSwitch(w http.ResponseWriter, r *http.Request) {
 	}
 	switchEnvironment(env)
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, env)
+	fmt.Fprint(w, env)
 }
 
 func handleCurrentEnv(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, currentEnv)
+	fmt.Fprint(w, currentEnv)
 }
 
 func setupHTTPServer() {
